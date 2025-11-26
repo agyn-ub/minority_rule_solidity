@@ -345,11 +345,11 @@ contract MinorityRuleGameTest is Test {
         uint256 winnerPrize = totalPrize - platformFee;
 
         // Check balances after prize distribution
-        // Player3 initial balance was 10 ETH, paid 1 ETH entry fee, received 2.94 ETH prize
-        // Final balance should be 10 - 1 + 2.94 = 11.94 ETH
+        // Player3 balance is captured after paying entry fee (9 ETH), then receives 2.94 ETH prize
+        // Final balance should be 9 + 2.94 = 11.94 ETH
         assertEq(
             player3.balance,
-            initialPlayer3Balance - ENTRY_FEE + winnerPrize
+            initialPlayer3Balance + winnerPrize
         );
         assertEq(
             platformFeeRecipient.balance,
