@@ -220,7 +220,10 @@ contract MinorityRuleGame {
             ? game.hasJoined[msg.sender] 
             : game.isRemainingPlayer[msg.sender];
         require(isEligible, "Player not eligible to commit in current round");
-        require(game.currentRoundCommits[msg.sender].commitHash == bytes32(0), "Already committed this round");
+        require(
+            game.currentRoundCommits[msg.sender].round != game.currentRound, 
+            "Already committed this round"
+        );
         
         // Store commitment and increment counter
         game.currentRoundCommits[msg.sender] = CommitRecord({
@@ -269,8 +272,15 @@ contract MinorityRuleGame {
         require(game.gameId != 0, "Game does not exist");
         require(game.state == GameState.RevealPhase, "Reveal phase is not active");
         require(game.revealDeadline == 0 || block.timestamp <= game.revealDeadline, "Reveal deadline has passed");
-        require(game.currentRoundCommits[msg.sender].commitHash != bytes32(0), "No commitment found for player");
-        require(game.currentRoundReveals[msg.sender].timestamp == 0, "Already revealed this round");
+        require(
+            game.currentRoundCommits[msg.sender].round == game.currentRound &&
+            game.currentRoundCommits[msg.sender].commitHash != bytes32(0), 
+            "No commitment found for player"
+        );
+        require(
+            game.currentRoundReveals[msg.sender].round != game.currentRound, 
+            "Already revealed this round"
+        );
         require(salt != bytes32(0), "Invalid salt");
         
         // Verify the reveal matches the commitment
@@ -346,23 +356,28 @@ contract MinorityRuleGame {
             votesRemaining
         );
         
-        // Update remaining players - only those who voted minority vote continue
-        address[] memory currentPlayers = game.currentRound == 1 ? game.players : game.remainingPlayers;
+        // Update remaining players - optimized single loop approach
+        address[] storage currentPlayersStorage = game.currentRound == 1 ? game.players : game.remainingPlayers;
+        uint256 currentPlayersLength = currentPlayersStorage.length;
         
-        // First, mark all current players as not remaining
-        for (uint256 i = 0; i < currentPlayers.length; i++) {
-            game.isRemainingPlayer[currentPlayers[i]] = false;
-        }
-        
-        // Clear the array and rebuild with minority voters only
+        // Clear remaining players array for rebuilding
         delete game.remainingPlayers;
         
-        for (uint256 i = 0; i < currentPlayers.length; i++) {
-            address player = currentPlayers[i];
-            if (game.currentRoundReveals[player].timestamp > 0 && 
-                game.currentRoundReveals[player].vote == minorityVote) {
+        // Single loop: check votes, update mappings, rebuild array
+        for (uint256 i = 0; i < currentPlayersLength; i++) {
+            address player = currentPlayersStorage[i];
+            
+            // Check if player voted in current round and voted minority (round-aware)
+            bool hasRevealed = game.currentRoundReveals[player].round == game.currentRound && 
+                              game.currentRoundReveals[player].timestamp > 0;
+            bool votedMinority = hasRevealed && game.currentRoundReveals[player].vote == minorityVote;
+            
+            // Update remaining status (mark all as not remaining first, then set winners)
+            game.isRemainingPlayer[player] = votedMinority;
+            
+            // Add to remaining players if they advance
+            if (votedMinority) {
                 game.remainingPlayers.push(player);
-                game.isRemainingPlayer[player] = true; // Mark as remaining for next round
             }
         }
         
@@ -378,12 +393,8 @@ contract MinorityRuleGame {
             game.currentCommitCount = 0; // Reset commit counter
             game.currentRevealCount = 0; // Reset reveal counter
             
-            // Clear commit-reveal data for next round
-            address[] memory playersToReset = game.remainingPlayers;
-            for (uint256 i = 0; i < playersToReset.length; i++) {
-                delete game.currentRoundCommits[playersToReset[i]];
-                delete game.currentRoundReveals[playersToReset[i]];
-            }
+            // Lazy cleanup: Data will be validated by round number in next round
+            // No need to explicitly delete - round-based validation handles stale data
             
             // Reset deadlines - creator will set new ones manually
             game.commitDeadline = 0;
@@ -528,14 +539,18 @@ contract MinorityRuleGame {
      * @dev Check if player has committed in current round
      */
     function hasPlayerCommitted(uint64 gameId, address player) external view returns (bool) {
-        return games[gameId].currentRoundCommits[player].commitHash != bytes32(0);
+        Game storage game = games[gameId];
+        return game.currentRoundCommits[player].round == game.currentRound && 
+               game.currentRoundCommits[player].commitHash != bytes32(0);
     }
 
     /**
      * @dev Check if player has revealed in current round
      */
     function hasPlayerRevealed(uint64 gameId, address player) external view returns (bool) {
-        return games[gameId].currentRoundReveals[player].timestamp > 0;
+        Game storage game = games[gameId];
+        return game.currentRoundReveals[player].round == game.currentRound && 
+               game.currentRoundReveals[player].timestamp > 0;
     }
 
     /**
